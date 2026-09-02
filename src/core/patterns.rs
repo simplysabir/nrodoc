@@ -142,13 +142,10 @@ fn find(text: &[u8], pick: fn(&AbiPattern) -> &Pattern) -> Vec<Hit> {
     let mut hits: Vec<Hit> = all()
         .iter()
         .flat_map(|p| {
-            pick(p)
-                .find_all(text)
-                .into_iter()
-                .map(|offset| Hit {
-                    label: p.label,
-                    offset,
-                })
+            pick(p).find_all(text).into_iter().map(|offset| Hit {
+                label: p.label,
+                offset,
+            })
         })
         .collect();
     hits.sort_by_key(|hit| hit.offset);
@@ -209,7 +206,11 @@ mod tests {
             entry.patched.apply(&mut buf, 16);
 
             assert!(find_legacy(&buf).is_empty(), "{label}: legacy bytes remain");
-            assert_eq!(find_patched(&buf).len(), 1, "{label}: not recognised as patched");
+            assert_eq!(
+                find_patched(&buf).len(),
+                1,
+                "{label}: not recognised as patched"
+            );
         }
     }
 

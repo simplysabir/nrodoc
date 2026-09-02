@@ -40,7 +40,8 @@ impl Pattern {
         let mut bytes = Vec::with_capacity(clean.len() / 2);
         let mut mask = Vec::with_capacity(clean.len() / 2);
         for pair in clean.as_bytes().chunks(2) {
-            let pair = std::str::from_utf8(pair).map_err(|_| PatternError::BadByte(clean.clone()))?;
+            let pair =
+                std::str::from_utf8(pair).map_err(|_| PatternError::BadByte(clean.clone()))?;
             if pair == "??" {
                 bytes.push(0);
                 mask.push(0);
@@ -144,10 +145,7 @@ mod tests {
 
     #[test]
     fn rejects_malformed_specs() {
-        assert!(matches!(
-            Pattern::parse("A"),
-            Err(PatternError::OddLength)
-        ));
+        assert!(matches!(Pattern::parse("A"), Err(PatternError::OddLength)));
         assert!(matches!(
             Pattern::parse("zz"),
             Err(PatternError::BadByte(_))

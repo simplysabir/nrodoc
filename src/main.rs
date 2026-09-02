@@ -5,10 +5,13 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use memmap2::Mmap;
-use nrodoc::core::nacp;
 use nrodoc::core::nro::{Assets, Nro, Segment};
+use nrodoc::core::verdict::Report;
+use nrodoc::core::{nacp, svc, verdict};
 
-/// Exit code for I/O and usage errors. Scan verdict codes come later.
+/// Scan found at least one file that is not OK or already patched.
+const EXIT_FINDINGS: u8 = 1;
+/// I/O or usage error.
 const EXIT_ERROR: u8 = 2;
 
 #[derive(Parser)]
@@ -25,16 +28,22 @@ enum Command {
         /// Path to a .nro or .ovl file.
         file: PathBuf,
     },
+    /// Report each app's ABI compatibility verdict. Read-only.
+    Scan {
+        /// Path to a .nro or .ovl file.
+        path: PathBuf,
+    },
 }
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
-        Command::Info { file } => info(&file),
+        Command::Info { file } => info(&file).map(|()| 0),
+        Command::Scan { path } => scan(&path),
     };
 
     match result {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(code) => ExitCode::from(code),
         Err(err) => {
             eprintln!("error: {err:#}");
             ExitCode::from(EXIT_ERROR)
@@ -42,12 +51,39 @@ fn main() -> ExitCode {
     }
 }
 
-fn info(path: &Path) -> Result<()> {
+/// Maps a file read-only.
+///
+/// SAFETY: as unsafe as any mmap — a concurrent truncation would fault the process.
+/// These are files sitting on the user's own SD card and we only ever read them.
+fn map_file(path: &Path) -> Result<Mmap> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
-    // SAFETY: as unsafe as any mmap — a concurrent truncation of the file would
-    // fault. We only read, and these are files on the user's own SD card.
-    let data =
-        unsafe { Mmap::map(&file) }.with_context(|| format!("mapping {}", path.display()))?;
+    unsafe { Mmap::map(&file) }.with_context(|| format!("mapping {}", path.display()))
+}
+
+fn scan(path: &Path) -> Result<u8> {
+    let data = map_file(path)?;
+    let report = verdict::analyze(path.to_path_buf(), &data);
+    print_report(&report);
+    Ok(u8::from(report.verdict.is_finding()) * EXIT_FINDINGS)
+}
+
+fn print_report(report: &Report) {
+    println!(
+        "{}  {}  {}",
+        report.verdict.label(),
+        report.display_name(),
+        report.path.display()
+    );
+    for note in &report.notes {
+        println!("  - {note}");
+    }
+    for hit in report.legacy_hits.iter().chain(&report.patched_hits) {
+        println!("  @ {:#010x}  {}", hit.offset, hit.label);
+    }
+}
+
+fn info(path: &Path) -> Result<()> {
+    let data = map_file(path)?;
     let nro = Nro::parse(&data).with_context(|| format!("parsing {}", path.display()))?;
 
     println!("File:         {}", path.display());
@@ -79,9 +115,24 @@ fn info(path: &Path) -> Result<()> {
     println!("    {:<8}{:20}size {:#010x}", ".bss", "", h.bss_size);
 
     print_mod0(&nro);
+    print_syscalls(&nro);
     print_assets(nro.assets);
 
     Ok(())
+}
+
+fn print_syscalls(nro: &Nro) {
+    let text = nro.text();
+    println!("\nSyscalls      {} distinct", svc::syscalls(text).len());
+    let jit = svc::jit_syscalls(text);
+    if jit.is_empty() {
+        println!("  JIT:        none detected");
+        return;
+    }
+    for (i, syscall) in jit.iter().enumerate() {
+        let label = if i == 0 { "JIT:" } else { "" };
+        println!("  {label:<10}  {:#04x} {}", syscall.number, syscall.name);
+    }
 }
 
 fn print_segment(name: &str, seg: Segment) {

@@ -39,7 +39,10 @@ fn ppsspp_header_and_nacp() {
     let mod0 = nro.mod0.expect("MOD0 should be found");
     assert_eq!(mod0.offset, 0x118);
     assert!(mod0.lny0, "LNY0 is present");
-    assert!(!mod0.lny1, "LNY1 is absent — real code sits where it would be");
+    assert!(
+        !mod0.lny1,
+        "LNY1 is absent — real code sits where it would be"
+    );
     assert_eq!(mod0.lny2_revision, None);
     assert!(nro.hbmenu_warns(), "hbmenu shows the red ABI warning");
 
