@@ -40,7 +40,9 @@ pub enum NroError {
     BadMagic([u8; 4]),
     #[error("NRO image size {size:#x} exceeds the file size {file_len:#x}")]
     ImageTooLarge { size: u32, file_len: usize },
-    #[error("{name} segment (offset {off:#x}, size {size:#x}) extends past the {limit:#x}-byte image")]
+    #[error(
+        "{name} segment (offset {off:#x}, size {size:#x}) extends past the {limit:#x}-byte image"
+    )]
     SegmentOutOfBounds {
         name: &'static str,
         off: u32,

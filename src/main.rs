@@ -46,7 +46,8 @@ fn info(path: &Path) -> Result<()> {
     let file = File::open(path).with_context(|| format!("opening {}", path.display()))?;
     // SAFETY: as unsafe as any mmap — a concurrent truncation of the file would
     // fault. We only read, and these are files on the user's own SD card.
-    let data = unsafe { Mmap::map(&file) }.with_context(|| format!("mapping {}", path.display()))?;
+    let data =
+        unsafe { Mmap::map(&file) }.with_context(|| format!("mapping {}", path.display()))?;
     let nro = Nro::parse(&data).with_context(|| format!("parsing {}", path.display()))?;
 
     println!("File:         {}", path.display());
@@ -92,7 +93,10 @@ fn print_segment(name: &str, seg: Segment) {
 
 fn print_mod0(nro: &Nro) {
     let Some(mod0) = nro.mod0 else {
-        println!("\nMOD0          not found (expected at {:#x})", nro.mod_offset);
+        println!(
+            "\nMOD0          not found (expected at {:#x})",
+            nro.mod_offset
+        );
         println!("  ABI:        unknown — hbmenu will show the ABI warning");
         return;
     };
