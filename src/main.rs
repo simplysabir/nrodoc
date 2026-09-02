@@ -131,8 +131,9 @@ fn scan(path: &Path, json: bool, explain: bool) -> Result<u8> {
 
         if explain {
             for finding in reports.iter().filter(|r| r.verdict.is_finding()) {
-                print_explanation(finding, root);
+                report::explain::finding(finding, root);
             }
+            println!("\n{}", report::explain::BACKGROUND);
         }
     }
 
@@ -384,24 +385,6 @@ fn write_atomic(target: &Path, data: &[u8]) -> Result<()> {
     drop(file);
 
     fs::rename(&temp, target).with_context(|| format!("renaming into {}", target.display()))
-}
-
-fn print_explanation(report: &Report, root: &Path) {
-    println!(
-        "\n{} — {}",
-        report.display_name(),
-        report::relative(&report.path, root)
-    );
-    println!("  verdict: {}", report.verdict.label());
-    for note in &report.notes {
-        println!("  - {note}");
-    }
-    for hit in &report.legacy_hits {
-        println!("  @ {:#010x}  legacy  {}", hit.offset, hit.label);
-    }
-    for hit in &report.patched_hits {
-        println!("  @ {:#010x}  patched {}", hit.offset, hit.label);
-    }
 }
 
 fn info(path: &Path) -> Result<()> {

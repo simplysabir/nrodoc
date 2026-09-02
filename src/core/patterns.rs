@@ -1,5 +1,8 @@
 //! The legacy-ABI signatures, ported byte-for-byte from hbpatcher's `LegacyAbiPatch`
-//! (`src/patcher/patches.ts`).
+//! (`src/patcher/patches.ts`), Copyright (c) alula, GPL-2.0-or-later. The choice of
+//! functions, the eight compiler-variant signatures and the old->new mapping are all
+//! alula's reverse engineering; nrodoc is a derivative work and carries the same
+//! licence.
 //!
 //! libnx before v4.10.0 started its user TLS slots at `+0x108`, inside the region the
 //! FW 21.0.0 kernel now uses for `thread_cpu_time`. The fix, in every variant below,
