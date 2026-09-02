@@ -1,1 +1,6 @@
 /target
+
+# Local test fixtures: real .nro files. Never commit these — they are large and
+# they are someone else's build artifacts, not ours.
+/fixtures/local/
+/src/ignore/

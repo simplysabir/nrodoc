@@ -2,5 +2,19 @@
 name = "nrodoc"
 version = "0.1.0"
 edition = "2024"
+description = "Switch homebrew ABI doctor: scan .nro files for the FW 21.0.0 / Atmosphere 1.10.0 TLS ABI break, and patch them offline"
+license = "MIT"
+repository = "https://github.com/simplysabir/nrodoc"
+keywords = ["nintendo-switch", "homebrew", "nro", "libnx", "abi"]
+categories = ["command-line-utilities"]
 
 [dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+memchr = "2"
+memmap2 = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tabled = "0.20"
+thiserror = "2"
+walkdir = "2"
