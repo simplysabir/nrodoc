@@ -34,13 +34,17 @@ enum Command {
     },
     /// Rewrite legacy TLS access to the new ABI. The only command that writes.
     Patch {
-        /// Path to a .nro or .ovl file.
-        file: PathBuf,
+        /// A .nro/.ovl file, or a directory when --all is given.
+        path: PathBuf,
+        /// Patch every file under a directory. Implies --in-place: writing
+        /// <name>.patched.nro all over an SD card would help nobody.
+        #[arg(long, conflicts_with = "in_place")]
+        all: bool,
         /// Rewrite the file itself instead of writing <name>.patched.nro alongside.
         #[arg(long)]
         in_place: bool,
-        /// Skip the .bak copy that --in-place makes.
-        #[arg(long, requires = "in_place")]
+        /// Skip the .bak copies that --in-place and --all make.
+        #[arg(long)]
         no_backup: bool,
         /// Report what would change without writing anything.
         #[arg(long)]
@@ -70,11 +74,12 @@ fn main() -> ExitCode {
             explain,
         } => scan(&path, json, explain),
         Command::Patch {
-            file,
+            path,
+            all,
             in_place,
             no_backup,
             dry_run,
-        } => patch(&file, in_place, no_backup, dry_run),
+        } => patch(&path, all, in_place, no_backup, dry_run),
     };
 
     match result {
@@ -139,33 +144,146 @@ fn scan(path: &Path, json: bool, explain: bool) -> Result<u8> {
     Ok(u8::from(findings) * EXIT_FINDINGS)
 }
 
-fn patch(file: &Path, in_place: bool, no_backup: bool, dry_run: bool) -> Result<u8> {
-    anyhow::ensure!(file.is_file(), "{} is not a file", file.display());
+fn patch(path: &Path, all: bool, in_place: bool, no_backup: bool, dry_run: bool) -> Result<u8> {
+    anyhow::ensure!(
+        !no_backup || in_place || all,
+        "--no-backup only applies with --in-place or --all"
+    );
+    if all {
+        return patch_all(path, no_backup, dry_run);
+    }
+    anyhow::ensure!(
+        path.is_file(),
+        "{} is not a file (use --all)",
+        path.display()
+    );
 
-    let mut data = fs::read(file).with_context(|| format!("reading {}", file.display()))?;
-    let applied = match core_patch::patch(&mut data) {
-        Ok(applied) => applied,
+    match patch_file(path, in_place, no_backup, dry_run)? {
         // Already patched, or a build with no signature nrodoc recognises. Not an
         // error — `scan` explains which, and the file is untouched either way.
-        Err(err @ core_patch::PatchError::NothingToPatch) => {
-            println!("{}: {err}", file.display());
-            return Ok(EXIT_FINDINGS);
+        PatchOutcome::NothingToPatch => {
+            println!("{}: nothing to patch", path.display());
+            Ok(EXIT_FINDINGS)
         }
-        Err(err) => return Err(err.into()),
-    };
+        PatchOutcome::DryRun(patched) => {
+            print_patched(path, &patched);
+            println!("dry run: nothing written");
+            Ok(0)
+        }
+        PatchOutcome::Applied {
+            patched,
+            target,
+            backup,
+        } => {
+            print_patched(path, &patched);
+            if let Some(backup) = backup {
+                println!("backup: {}", backup.display());
+            }
+            println!("wrote:  {}", target.display());
+            Ok(0)
+        }
+    }
+}
 
-    println!(
-        "{}: {} signature(s) to rewrite",
-        file.display(),
-        applied.len()
+/// Patches every file under `root`. One unpatchable file must not stop the sweep —
+/// on a real SD card there is always something odd — so failures are collected and
+/// reported at the end rather than aborting.
+fn patch_all(root: &Path, no_backup: bool, dry_run: bool) -> Result<u8> {
+    let walk = walk::collect(root);
+    anyhow::ensure!(
+        !walk.files.is_empty(),
+        "no .nro or .ovl files found under {}",
+        root.display()
     );
-    for application in &applied {
-        println!("  @ {:#010x}  {}", application.offset, application.label);
+
+    let (mut changed, mut skipped, mut failed, mut jit) = (0, 0, 0, Vec::new());
+    for file in &walk.files {
+        let name = report::relative(file, root);
+        let verb = if dry_run { "would  " } else { "patched" };
+
+        match patch_file(file, true, no_backup, dry_run) {
+            Ok(PatchOutcome::NothingToPatch) => {
+                skipped += 1;
+                println!("  skipped {name}");
+            }
+            Ok(PatchOutcome::DryRun(patched) | PatchOutcome::Applied { patched, .. }) => {
+                changed += 1;
+                if patched.runtime_codegen {
+                    jit.push(name.clone());
+                }
+                println!(
+                    "  {verb} {name}  ({} signature(s)){}",
+                    patched.applications.len(),
+                    if patched.runtime_codegen {
+                        "  [generates code at runtime]"
+                    } else {
+                        ""
+                    }
+                );
+            }
+            Err(err) => {
+                failed += 1;
+                println!("  FAILED  {name}: {err:#}");
+            }
+        }
     }
 
+    let verb = if dry_run { "would patch" } else { "patched" };
+    println!(
+        "\n{} file(s): {changed} {verb}, {skipped} skipped (nothing to patch), {failed} failed",
+        walk.files.len()
+    );
+    if !dry_run && changed > 0 && !no_backup {
+        println!("originals kept alongside as .bak");
+    }
+    if !jit.is_empty() {
+        println!("\nwarning: {JIT_WARNING}");
+        for name in &jit {
+            println!("  {name}");
+        }
+    }
+    for error in &walk.errors {
+        eprintln!("warning: {error}");
+    }
+
+    Ok(if failed > 0 { EXIT_ERROR } else { 0 })
+}
+
+enum PatchOutcome {
+    /// Parsed fine, but carries no legacy signature to rewrite.
+    NothingToPatch,
+    DryRun(Patched),
+    Applied {
+        patched: Patched,
+        target: PathBuf,
+        backup: Option<PathBuf>,
+    },
+}
+
+struct Patched {
+    applications: Vec<core_patch::Application>,
+    /// The patch fixes TLS. It cannot fix a JIT, so say so even on success.
+    runtime_codegen: bool,
+}
+
+/// Patches one file on disk. Nothing is written unless the patch verified.
+fn patch_file(file: &Path, in_place: bool, no_backup: bool, dry_run: bool) -> Result<PatchOutcome> {
+    let mut data = fs::read(file).with_context(|| format!("reading {}", file.display()))?;
+    let applications = match core_patch::patch(&mut data) {
+        Ok(applications) => applications,
+        Err(core_patch::PatchError::NothingToPatch) => return Ok(PatchOutcome::NothingToPatch),
+        Err(err) => return Err(anyhow::Error::new(err)),
+    };
+
+    // The buffer verified as an NRO inside `core_patch::patch`, so this cannot fail.
+    let patched = Patched {
+        applications,
+        runtime_codegen: Nro::parse(&data)
+            .is_ok_and(|nro| !svc::jit_syscalls(nro.text()).is_empty()),
+    };
+
     if dry_run {
-        println!("dry run: nothing written");
-        return Ok(0);
+        return Ok(PatchOutcome::DryRun(patched));
     }
 
     // Resolved only now: if there was nothing to patch we never get here, and a name
@@ -173,11 +291,31 @@ fn patch(file: &Path, in_place: bool, no_backup: bool, dry_run: bool) -> Result<
     let Destination { target, backup } = destination(file, in_place, no_backup)?;
     if let Some(backup) = &backup {
         fs::copy(file, backup).with_context(|| format!("writing backup {}", backup.display()))?;
-        println!("backup: {}", backup.display());
     }
     write_atomic(&target, &data)?;
-    println!("wrote: {}", target.display());
-    Ok(0)
+
+    Ok(PatchOutcome::Applied {
+        patched,
+        target,
+        backup,
+    })
+}
+
+const JIT_WARNING: &str = "this app generates code at runtime — the TLS patch may not be enough, and it may \
+     still need a rebuild against libnx >= 4.10.0";
+
+fn print_patched(file: &Path, patched: &Patched) {
+    println!(
+        "{}: {} signature(s) rewritten",
+        file.display(),
+        patched.applications.len()
+    );
+    for application in &patched.applications {
+        println!("  @ {:#010x}  {}", application.offset, application.label);
+    }
+    if patched.runtime_codegen {
+        println!("warning: {JIT_WARNING}");
+    }
 }
 
 struct Destination {

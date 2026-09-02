@@ -16,12 +16,13 @@ use crate::core::patterns;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PatchError {
-    #[error("not a valid NRO: {0}")]
+    // The reason lives in the source, so `{:#}` does not print it twice.
+    #[error("not a valid NRO")]
     Parse(#[from] NroError),
     #[error("no legacy TLS signature found — nothing to patch")]
     NothingToPatch,
-    #[error("patched output no longer parses as an NRO: {0}")]
-    VerifyParse(NroError),
+    #[error("patched output no longer parses as an NRO")]
+    VerifyParse(#[source] NroError),
     #[error("{0} legacy signature(s) survived patching; the file was left untouched")]
     VerifyIncomplete(usize),
 }
