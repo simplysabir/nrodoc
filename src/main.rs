@@ -7,7 +7,9 @@ use clap::{Parser, Subcommand};
 use memmap2::Mmap;
 use nrodoc::core::nro::{Assets, Nro, Segment};
 use nrodoc::core::verdict::Report;
-use nrodoc::core::{nacp, svc, verdict};
+use nrodoc::core::{nacp, svc, verdict, walk};
+
+mod report;
 
 /// Scan found at least one file that is not OK or already patched.
 const EXIT_FINDINGS: u8 = 1;
@@ -30,8 +32,15 @@ enum Command {
     },
     /// Report each app's ABI compatibility verdict. Read-only.
     Scan {
-        /// Path to a .nro or .ovl file.
+        /// A .nro/.ovl file, a directory, or an SD card root. Directories are
+        /// searched recursively.
         path: PathBuf,
+        /// Emit the reports as JSON instead of a table.
+        #[arg(long)]
+        json: bool,
+        /// Print the full reasoning and pattern offsets for every finding.
+        #[arg(long)]
+        explain: bool,
     },
 }
 
@@ -39,7 +48,11 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let result = match cli.command {
         Command::Info { file } => info(&file).map(|()| 0),
-        Command::Scan { path } => scan(&path),
+        Command::Scan {
+            path,
+            json,
+            explain,
+        } => scan(&path, json, explain),
     };
 
     match result {
@@ -60,25 +73,65 @@ fn map_file(path: &Path) -> Result<Mmap> {
     unsafe { Mmap::map(&file) }.with_context(|| format!("mapping {}", path.display()))
 }
 
-fn scan(path: &Path) -> Result<u8> {
-    let data = map_file(path)?;
-    let report = verdict::analyze(path.to_path_buf(), &data);
-    print_report(&report);
-    Ok(u8::from(report.verdict.is_finding()) * EXIT_FINDINGS)
+fn scan(path: &Path, json: bool, explain: bool) -> Result<u8> {
+    let walk = walk::collect(path);
+    if walk.files.is_empty() && walk.errors.is_empty() {
+        anyhow::bail!(
+            "no .nro or .ovl files found under {} (and it is not a file)",
+            path.display()
+        );
+    }
+
+    let reports: Vec<Report> = walk
+        .files
+        .iter()
+        .map(|file| {
+            let data = map_file(file)?;
+            Ok(verdict::analyze(file.clone(), &data))
+        })
+        .collect::<Result<_>>()?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+    } else {
+        let root = if path.is_file() {
+            path.parent().unwrap_or(path)
+        } else {
+            path
+        };
+        println!("{}", report::table::render(&reports, root));
+        println!("\n{}", report::table::summary(&reports));
+
+        if explain {
+            for finding in reports.iter().filter(|r| r.verdict.is_finding()) {
+                print_explanation(finding, root);
+            }
+        }
+    }
+
+    for error in &walk.errors {
+        eprintln!("warning: {error}");
+    }
+
+    let findings = reports.iter().any(|report| report.verdict.is_finding());
+    Ok(u8::from(findings) * EXIT_FINDINGS)
 }
 
-fn print_report(report: &Report) {
+fn print_explanation(report: &Report, root: &Path) {
     println!(
-        "{}  {}  {}",
-        report.verdict.label(),
+        "\n{} — {}",
         report.display_name(),
-        report.path.display()
+        report::relative(&report.path, root)
     );
+    println!("  verdict: {}", report.verdict.label());
     for note in &report.notes {
         println!("  - {note}");
     }
-    for hit in report.legacy_hits.iter().chain(&report.patched_hits) {
-        println!("  @ {:#010x}  {}", hit.offset, hit.label);
+    for hit in &report.legacy_hits {
+        println!("  @ {:#010x}  legacy  {}", hit.offset, hit.label);
+    }
+    for hit in &report.patched_hits {
+        println!("  @ {:#010x}  patched {}", hit.offset, hit.label);
     }
 }
 

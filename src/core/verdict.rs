@@ -159,18 +159,30 @@ fn notes(
             "{} patched TLS signature(s) already present",
             patched.len()
         )),
-        Verdict::PatchInsufficient => notes.push(format!(
-            "generates code at runtime ({}); likely needs a rebuild, not a patch",
+        Verdict::PatchInsufficient => {
+            notes.push("generates code at runtime; likely needs a rebuild, not a patch".into())
+        }
+        Verdict::Unknown => {
+            notes.push("unrecognised build: no TLS signature and no LNY2 marker".into());
+        }
+    }
+
+    if verdict == Verdict::Unknown {
+        notes.push(
+            "either non-libnx homebrew, or a libnx build whose thread code does not match \
+             any known signature — nrodoc cannot patch it either way"
+                .into(),
+        );
+    }
+
+    if !jit.is_empty() {
+        notes.push(format!(
+            "maps its own executable memory: {}",
             jit.iter()
-                .map(|svc| svc.name)
+                .map(|syscall| syscall.name)
                 .collect::<Vec<_>>()
                 .join(", ")
-        )),
-        Verdict::Unknown => notes.push(
-            "no known TLS signature and no LNY2 marker — non-libnx homebrew, or a build \
-             nrodoc does not recognise"
-                .into(),
-        ),
+        ));
     }
 
     if !legacy.is_empty() && !patched.is_empty() {
