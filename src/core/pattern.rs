@@ -70,6 +70,13 @@ impl Pattern {
         self.bytes.is_empty()
     }
 
+    /// Whether two patterns cover the same bytes with the same wildcards. A legacy
+    /// form and its patched form must agree, or applying one would not be undoable
+    /// by applying the other.
+    pub fn same_shape(&self, other: &Pattern) -> bool {
+        self.mask == other.mask
+    }
+
     /// Every 4-byte-aligned offset in `haystack` where this pattern matches.
     pub fn find_all(&self, haystack: &[u8]) -> Vec<usize> {
         let anchor = &self.bytes[self.anchor.clone()];

@@ -5,9 +5,9 @@ mod common;
 use std::path::PathBuf;
 
 use common::NroBuilder;
-use nrodoc::core::patterns;
 use nrodoc::core::verdict::{Verdict, analyze};
 use nrodoc::core::walk;
+use nrodoc::core::{patch, patterns};
 
 /// `svc 0x4b` (svcCreateCodeMemory), the cheapest JIT tell.
 const SVC_CREATE_CODE_MEMORY: u32 = 0xd400_0961;
@@ -137,6 +137,59 @@ fn malformed_files_are_reported_not_dropped() {
         assert_eq!(report.verdict, Verdict::Unknown, "{case}");
         assert!(report.parse_error.is_some(), "{case}: reason must be kept");
     }
+}
+
+#[test]
+fn patching_a_legacy_build_reproduces_the_patched_build_byte_for_byte() {
+    for pattern in patterns::all() {
+        let mut legacy = NroBuilder::new()
+            .with_pattern(&pattern.legacy)
+            .with_nacp("App", "author", "1.0")
+            .build();
+        let expected = NroBuilder::new()
+            .with_pattern(&pattern.patched)
+            .with_nacp("App", "author", "1.0")
+            .build();
+
+        let applied = patch::patch(&mut legacy).expect(pattern.label);
+        assert_eq!(applied.len(), 1, "{}", pattern.label);
+        assert_eq!(applied[0].label, pattern.label);
+        assert_eq!(applied[0].offset, common::body_offset());
+        assert_eq!(
+            legacy, expected,
+            "{}: patching must change nothing but the signature",
+            pattern.label
+        );
+        assert_eq!(verdict_of(&legacy), Verdict::Patched, "{}", pattern.label);
+    }
+}
+
+#[test]
+fn patching_rewrites_every_occurrence_not_just_the_first() {
+    let pattern = &patterns::all()[0];
+    let mut nro = NroBuilder::new()
+        .with_pattern(&pattern.legacy)
+        .with_words(&[0xd503_201f]) // nop, to keep the two copies apart
+        .with_pattern(&pattern.legacy)
+        .build();
+
+    let applied = patch::patch(&mut nro).unwrap();
+    assert_eq!(applied.len(), 2);
+    assert!(patterns::find_legacy(&nro).is_empty());
+}
+
+#[test]
+fn patching_an_already_patched_build_changes_nothing() {
+    let mut nro = NroBuilder::new()
+        .with_pattern(&patterns::all()[0].patched)
+        .build();
+    let before = nro.clone();
+
+    assert!(matches!(
+        patch::patch(&mut nro),
+        Err(patch::PatchError::NothingToPatch)
+    ));
+    assert_eq!(nro, before, "a refused patch must not touch the buffer");
 }
 
 #[test]

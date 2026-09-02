@@ -101,10 +101,9 @@ static PATTERNS: LazyLock<Vec<AbiPattern>> = LazyLock::new(|| {
         .map(|&(label, legacy, patched)| {
             let legacy = Pattern::parse(legacy).expect("legacy pattern literal is malformed");
             let patched = Pattern::parse(patched).expect("patched pattern literal is malformed");
-            assert_eq!(
-                legacy.len(),
-                patched.len(),
-                "{label}: legacy and patched forms must be the same length"
+            assert!(
+                legacy.same_shape(&patched),
+                "{label}: legacy and patched forms must have identical length and wildcards"
             );
             AbiPattern {
                 label,
